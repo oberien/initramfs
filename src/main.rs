@@ -1,4 +1,4 @@
-use initramfs::Initramfs;
+use initramfs::{Initramfs, MaybeRawArchive};
 
 fn main() {
     env_logger::init();
@@ -11,7 +11,11 @@ fn main() {
     };
     let content = std::fs::read(filename).expect("can't read file");
     let initramfs = Initramfs::parse(&content).expect("parsing initramfs failed");
-    for file in initramfs.archives.iter().flat_map(|archive| &archive.files) {
+    let files = initramfs.archives.iter().filter_map(|archive| match archive {
+        MaybeRawArchive::Parsed(archive) => Some(&archive.files),
+        MaybeRawArchive::Raw(_) => None,
+    }).flatten();
+    for file in files {
         println!("{}: {}", String::from_utf8_lossy(&file.filename), file.header.filesize);
     }
     let mut content2 = Vec::new();

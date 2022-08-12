@@ -1,5 +1,7 @@
 #![no_std]
 
+// specification: https://www.kernel.org/doc/Documentation/driver-api/early-userspace/buffer-format.rst
+
 extern crate alloc;
 
 use alloc::string::{String, ToString};
@@ -36,10 +38,22 @@ impl Display for Error {
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Initramfs {
-    pub archives: Vec<Archive>,
+    pub archives: Vec<MaybeRawArchive>,
 }
 
 impl Initramfs {
+    pub fn new() -> Initramfs {
+        Initramfs { archives: Vec::new() }
+    }
+
+    pub fn add_archive(&mut self, archive: Archive) {
+        self.archives.push(MaybeRawArchive::Parsed(archive));
+    }
+
+    pub fn add_raw_archive(&mut self, archive: Vec<u8>) {
+        self.archives.push(MaybeRawArchive::Raw(archive));
+    }
+
     pub fn parse(initramfs: &Vec<u8>) -> Result<Initramfs, Error> {
         log::trace!("Initramfs::parse");
         let mut archives = Vec::new();
@@ -48,16 +62,29 @@ impl Initramfs {
             index = parse_leading_zeroes(initramfs, index);
             let (archive, idx) = Archive::parse(initramfs, index)?;
             index = idx;
-            archives.push(archive);
+            archives.push(MaybeRawArchive::Parsed(archive));
         }
         Ok(Initramfs { archives })
     }
 
     pub fn write(&self, data: &mut Vec<u8>) {
         for archive in &self.archives {
-            archive.write(data);
+            match archive {
+                MaybeRawArchive::Parsed(archive) => archive.write(data),
+                MaybeRawArchive::Raw(raw) => data.extend_from_slice(raw),
+            }
+            // The spec doesn't state it, but uncompressed archives must be 4-byte-aligned.
+            // Compressed archives can directly follow each other unaligned.
+            // We always align archives as we don't know if an archive is compressed or not.
+            write_align_to_4(data);
         }
     }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum MaybeRawArchive {
+    Parsed(Archive),
+    Raw(Vec<u8>),
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -79,7 +106,7 @@ impl Archive {
         self.files.push(file);
     }
 
-    pub fn trailer(&mut self) {
+    pub fn add_trailer(&mut self) {
         self.files.push(File::new("TRAILER!!!".to_string(), Vec::new()));
     }
 
